@@ -9,8 +9,8 @@
 
 | Type | Critical | High | Medium | Low | Total |
 |------|----------|------|--------|-----|-------|
-| Product Issues | 0 | 0 | 1 | 1 | 2 |
-| Code Issues | 0 | 2 | 0 | 1 | 3 |
+| Product Issues | 0 | 0 | 3 | 1 | 4 |
+| Code Issues | 0 | 3 | 8 | 4 | 15 |
 
 ---
 
@@ -52,6 +52,44 @@ Raw HTML tags (specifically `<p>`) are not being stripped or rendered correctly 
 
 **Suggested Fix**:
 Use the Django `|safe` filter in the template if the HTML is trusted, or use `strip_tags` if plain text is desired.
+
+---
+
+### [P3] No User Feedback on Migration Errors
+
+**Severity**: Medium
+
+**Location**: Migration flows, UI
+
+**Description**:
+When a migration fails (e.g., due to API error, storage error, or DB error), the user is not shown a clear error message or feedback. The UI may remain unchanged or show a generic message.
+
+**Impact**:
+- Users may think migration succeeded when it failed.
+- Frustration and wasted time troubleshooting.
+- Data integrity risk if users proceed based on incorrect state.
+
+**Suggested Fix**:
+Show clear, actionable error messages in the UI when migration fails. Log errors with context and provide retry options.
+
+---
+
+### [P4] Slow PostgreSQL Flow
+
+**Severity**: Medium
+
+**Location**: Database migration, test case saving
+
+**Description**:
+The PostgreSQL flow for saving or updating test cases is slow, especially for large problems. This causes delays in migration and poor user experience.
+
+**Impact**:
+- Long wait times for users during migration.
+- Increased risk of timeouts or failed migrations.
+- Frustration for users with large datasets.
+
+**Suggested Fix**:
+Optimize database queries and use bulk operations where possible. Add progress indicators in the UI. Consider asynchronous processing for large migrations.
 
 ---
 
@@ -124,6 +162,226 @@ Investigate `polygon_api.py`. Add robust error handling, retry logic for Polygon
 
 ---
 
+### [C4] Inefficient Redis Connection Handling
+
+**Severity**: Medium
+
+**Location**: `problems/polygon_api.py` (multiple methods)
+
+**Description**:
+A new Redis connection is created every time a cache operation is performed (e.g., in `store_test_cases_in_redis`, `get_test_cases_from_redis`, `clear_test_cases_from_redis`). This is done via repeated calls to `_get_redis_connection()` which I have added to remove duplication of redis connection and a bug while reading for SSL from env variables.
+
+**Impact**:
+- Increased latency for every cache operation.
+- Unnecessary overhead and resource usage.
+- Potential connection pool exhaustion under high load.
+
+**Suggested Fix**:
+Refactor to use a single, shared Redis connection or connection pool per request or per application instance.
+
+---
+
+### [C5] Storage Client Instantiation on Every Operation
+
+**Severity**: Medium
+
+**Location**: `problems/storage/factory.py`, `polygon_api.py`
+
+**Description**:
+The storage provider client (GCS, Azure, Local, GDrive) is instantiated every time `get_storage_provider()` is called, which happens in multiple places for every upload/delete operation.
+
+**Impact**:
+- Increased initialization overhead.
+- Possible redundant authentication and resource allocation.
+- Slower performance for batch operations.
+
+**Suggested Fix**:
+Cache the storage provider instance at the application or request level, and reuse it for all storage operations.
+
+---
+
+### [C6] Code Duplication
+
+**Severity**: Low
+
+**Location**: `polygon_api.py`, `views.py`, storage providers
+
+**Description**:
+Similar logic for uploading, deleting, and fetching test cases is repeated across multiple storage provider implementations and migration flows.
+
+**Impact**:
+- Harder to maintain and update.
+- Increased risk of inconsistent behavior or bugs.
+- Larger codebase with redundant code.
+
+**Suggested Fix**:
+Refactor common logic into shared utility functions or base classes. Use DRY (Don't Repeat Yourself) principles.
+
+---
+
+### [C7] Lack of Centralized Error Handling
+
+**Severity**: Medium
+
+**Location**: `polygon_api.py`, storage providers, views
+
+**Description**:
+Error handling is scattered across multiple functions, often using bare `except:` or logging errors without propagating them. This can lead to silent failures and makes debugging difficult.
+
+**Impact**:
+- Hard to trace root causes of failures.
+- Inconsistent error reporting to users.
+- Potential for missed exceptions and data corruption.
+
+**Suggested Fix**:
+Implement centralized error handling using custom exception classes and middleware. Ensure all errors are logged and surfaced appropriately.
+
+---
+
+### [C8] Insufficient Logging Granularity
+
+**Severity**: Low
+
+**Location**: `polygon_api.py`, views, storage providers
+
+**Description**:
+Logging is present but often lacks context (e.g., which user, which problem, which operation). Some critical operations may not be logged at all.
+
+**Impact**:
+- Harder to audit and debug issues.
+- Reduced observability for production monitoring.
+
+**Suggested Fix**:
+Add more detailed logging, including user IDs, problem IDs, and operation types. Use structured logging if possible.
+
+---
+
+### [C9] Hardcoded Configuration Values
+
+**Severity**: Low
+
+**Location**: Various files (e.g., expiry times, storage provider types)
+
+**Description**:
+Some configuration values (like Redis expiry, storage provider selection) are hardcoded in the code instead of being set via environment variables or Django settings.
+
+**Impact**:
+- Difficult to change configuration without code changes.
+- Reduces flexibility for deployment and testing.
+
+**Suggested Fix**:
+Move all configuration values to Django settings or environment variables.
+
+---
+
+### [C10] Missing Unit Tests for Edge Cases
+
+**Severity**: Medium
+
+**Location**: `tests/`, migration logic
+
+**Description**:
+While integration tests exist, there are few or no unit tests covering edge cases (e.g., duplicate titles, empty test cases, large test cases).
+
+**Impact**:
+- Increased risk of regressions.
+- Edge cases may break silently in production.
+
+**Suggested Fix**:
+Add targeted unit tests for all documented edge cases and failure scenarios.
+
+---
+
+### [C11] No Rate Limiting or Throttling
+
+**Severity**: Medium
+
+**Location**: API endpoints, migration flows
+
+**Description**:
+There is no rate limiting or throttling for API calls to Polygon or for migration operations. This can lead to abuse or accidental overload.
+
+**Impact**:
+- Risk of hitting external API limits.
+- Potential denial of service for other users.
+
+**Suggested Fix**:
+Implement rate limiting at the API or view level, and add retry/backoff logic for external calls.
+
+---
+
+### [C12] Lack of Transaction Management in DB Operations
+
+**Severity**: Medium
+
+**Location**: Database migration, views
+
+**Description**:
+Many database operations (especially bulk updates/inserts) do not use explicit transactions. This can lead to partial updates if an error occurs mid-operation.
+
+**Impact**:
+- Data inconsistency if migration fails partway.
+- Harder to roll back or recover from errors.
+
+**Suggested Fix**:
+Wrap bulk DB operations in atomic transactions using Django's `transaction.atomic()` context manager.
+
+---
+
+### [C13] No Caching for Expensive Computations
+
+**Severity**: Low
+
+**Location**: Problem fetching, test case generation
+
+**Description**:
+Some expensive computations (e.g., parsing large Polygon problems, generating test cases) are performed on every request without caching.
+
+**Impact**:
+- Increased server load and slower response times.
+- Redundant work for repeated requests.
+
+**Suggested Fix**:
+Cache results of expensive computations using Redis or Django's cache framework.
+
+---
+
+### [C14] Tight Coupling Between Views and Storage Logic
+
+**Severity**: Medium
+
+**Location**: `views.py`, storage providers
+
+**Description**:
+Views directly invoke storage provider logic, making it hard to test or swap out storage backends.
+
+**Impact**:
+- Reduced testability and flexibility.
+- Harder to refactor or extend storage logic.
+
+**Suggested Fix**:
+Introduce service layers or use dependency injection to decouple views from storage logic.
+
+---
+
+### [C15] Lack of Input Validation and Sanitization
+
+**Severity**: High
+
+**Location**: Forms, API endpoints
+
+**Description**:
+Some user inputs (problem titles, descriptions, test case data) are not validated or sanitized before processing.
+
+**Impact**:
+- Risk of injection attacks or data corruption.
+- Poor user experience due to unhandled invalid input.
+
+**Suggested Fix**:
+Add validation and sanitization for all user inputs using Django forms or serializers.
+
+---
+
 ## Edge Case Analysis
 
 ### Question 1: Empty Sample Test Cases
@@ -189,3 +447,5 @@ The system cuts off (truncates) the input and output data after just **260 chara
 
 **Code References**:
 - `views.py`
+
+---
